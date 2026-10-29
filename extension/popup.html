@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+    body { margin: 0; width: 380px; background: #1f2126; color: #e8eaee; font-size: 13px; }
+    header { padding: 12px 14px 10px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #303339; }
+    .logo { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, #00aeec, #fb7299); }
+    h1 { font-size: 13px; margin: 0; flex: 1; font-weight: 600; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #666; }
+    .dot.on { background: #35c46a; }
+    .dot.off { background: #e05555; }
+    .status { font-size: 11px; color: #8b929e; }
+    main { padding: 12px 14px; max-height: 420px; overflow: auto; }
+    .row { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px; background: #272a30; margin-bottom: 7px; cursor: pointer; border: 1px solid transparent; }
+    .row:hover { border-color: #00aeec; background: #2c3038; }
+    .row.busy { opacity: .55; pointer-events: none; }
+    .row .lab { flex: 1; }
+    .row .note { font-size: 11px; color: #8b929e; margin-top: 2px; }
+    .row .go { font-size: 12px; color: #00aeec; }
+    .hint { color: #8b929e; line-height: 1.7; }
+    .hint b { color: #e8eaee; }
+    .err { color: #ff8b8b; }
+    footer { padding: 10px 14px 12px; border-top: 1px solid #303339; display: flex; gap: 8px; align-items: center; }
+    input { flex: 1; background: #272a30; border: 1px solid #3a3f47; color: #e8eaee; border-radius: 6px; padding: 6px 8px; font-size: 12px; outline: none; }
+    input:focus { border-color: #00aeec; }
+    button.mini { background: #2c3038; color: #cfd4dc; border: 1px solid #3a3f47; border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+    button.mini:hover { border-color: #00aeec; color: #fff; }
+    .title-line { font-size: 12px; color: #9aa1ad; margin-bottom: 8px; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo"></div>
+    <h1>B站 → IDM</h1>
+    <span class="dot" id="dot"></span>
+    <span class="status" id="status">检测中</span>
+  </header>
+  <main id="main"><div class="hint">读取当前页面…</div></main>
+  <footer>
+    <input id="bridge" placeholder="http://127.0.0.1:12788" />
+    <button class="mini" id="save">保存</button>
+    <button class="mini" id="folder">目录</button>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>

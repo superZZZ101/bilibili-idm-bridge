@@ -1,0 +1,8 @@
+# 忽略本机配置与运行产物
+bridge/config.json
+bridge/bridge.log
+downloads/
+tmp/
+*.m4s
+*.part
+*.log

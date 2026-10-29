@@ -1,0 +1,156 @@
+﻿<#
+.SYNOPSIS
+  BiliIDM Bridge 安装脚本
+.DESCRIPTION
+  检查 Node.js / IDM、生成 config.json、可选注册开机自启。
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File install.ps1
+  powershell -ExecutionPolicy Bypass -File install.ps1 -Autostart:$false
+  powershell -ExecutionPolicy Bypass -File install.ps1 -Remove
+#>
+param(
+  [bool]$Autostart = $true,
+  [switch]$Remove
+)
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$bridgeDir = Join-Path $root 'bridge'
+$serverJs = Join-Path $bridgeDir 'server.mjs'
+$configPath = Join-Path $bridgeDir 'config.json'
+$taskName = 'BiliIDM Bridge'
+
+function Write-Head($t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
+
+# Windows PowerShell 5.1 在 $ErrorActionPreference='Stop' 下会把原生命令的 stderr 当异常，
+# schtasks 查不到任务时会往 stderr 写内容，直接调用会中断脚本。包一层，只取退出码。
+# 注意用完整路径：函数名若叫 SchTasks，`& schtasks` 会因大小写不敏感而递归调用自己。
+function Invoke-SchTasks([string[]]$argv) {
+  $exe = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+  $old = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { & $exe @argv 2>&1 | Out-Null; return $LASTEXITCODE } finally { $ErrorActionPreference = $old }
+}
+
+# /TR 里带空格的路径在 PowerShell 5.1 传参时引号会被吃掉，交给 cmd 原样解析
+function Invoke-Cmd([string]$line) {
+  $exe = Join-Path $env:SystemRoot 'System32\cmd.exe'
+  $old = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { & $exe /c $line 2>&1 | Out-Null; return $LASTEXITCODE } finally { $ErrorActionPreference = $old }
+}
+
+if ($Remove) {
+  Write-Head '移除开机自启'
+  $launcher = Join-Path ([Environment]::GetFolderPath('Startup')) 'BiliIDM Bridge.vbs'
+  if (Test-Path $launcher) { Remove-Item $launcher -Force; Write-Host '已删除启动项' -ForegroundColor Green }
+  else { Write-Host '没有找到启动项（可能本来就没装）' -ForegroundColor Yellow }
+  $code = Invoke-SchTasks @('/Delete', '/TN', $taskName, '/F')
+  if ($code -eq 0) { Write-Host '已删除旧的计划任务' -ForegroundColor Green }
+  Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+    Where-Object { $_.CommandLine -like '*server.mjs*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  Write-Host '已停止后台服务'
+  return
+}
+
+Write-Head '1. 检查 Node.js'
+$node = (Get-Command node -ErrorAction SilentlyContinue).Source
+if (-not $node) {
+  Write-Host '找不到 Node.js，请先安装：https://nodejs.org/' -ForegroundColor Red
+  exit 1
+}
+Write-Host "Node.js: $node  ($(& node -v))" -ForegroundColor Green
+
+Write-Head '2. 检查 Internet Download Manager'
+$idmanCandidates = @(
+  "$env:ProgramFiles\Internet Download Manager\IDMan.exe",
+  "${env:ProgramFiles(x86)}\Internet Download Manager\IDMan.exe"
+)
+$idman = $idmanCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($idman) { Write-Host "IDM: $idman" -ForegroundColor Green }
+else { Write-Host '没找到 IDMan.exe —— IDM 没装或装在别处，稍后改 config.json 里的 idmanPath' -ForegroundColor Yellow }
+
+Write-Head '3. 检查 ffmpeg（可选，DASH 高清合并要用）'
+$ffmpeg = (Get-Command ffmpeg -ErrorAction SilentlyContinue).Source
+if (-not $ffmpeg) {
+  $local = "$env:LOCALAPPDATA\Microsoft\WinGet\Links\ffmpeg.exe"
+  if (Test-Path $local) { $ffmpeg = $local }
+}
+if (-not $ffmpeg) {
+  # 常见做法是解压一个 ffmpeg-*-full_build 到用户目录（桌面放最后，桌面上的东西随时会被清掉）
+  $scanRoots = @($env:USERPROFILE, "$env:USERPROFILE\Downloads", "$env:USERPROFILE\Documents", "$env:USERPROFILE\Desktop")
+  # 注意：循环变量不能叫 $root，会覆盖脚本根目录（$root），导致最后提示的扩展路径变成别的目录
+  foreach ($scanDir in $scanRoots) {
+    if ($ffmpeg) { break }
+    $hit = Get-ChildItem -Path $scanDir -Directory -Filter 'ffmpeg*' -ErrorAction SilentlyContinue |
+      ForEach-Object { Join-Path $_.FullName 'bin\ffmpeg.exe' } |
+      Where-Object { Test-Path $_ } |
+      Select-Object -First 1
+    if ($hit) { $ffmpeg = $hit }
+  }
+}
+if ($ffmpeg) { Write-Host "ffmpeg: $ffmpeg" -ForegroundColor Green }
+else { Write-Host '未安装 —— 不影响“单文件 MP4”下载，DASH 高清只会得到两个 m4s 分片' -ForegroundColor Yellow }
+
+Write-Head '4. 生成 config.json'
+if (Test-Path $configPath) {
+  Write-Host "已存在，保留原样：$configPath" -ForegroundColor Yellow
+} else {
+  $cfg = [ordered]@{
+    port          = 12788
+    host          = '127.0.0.1'
+    downloadDir   = (Join-Path $env:USERPROFILE 'Downloads\BiliIDM')
+    idmanPath     = [string]$idman
+    ffmpegPath    = [string]$ffmpeg
+    mergeAutoDelete = $true
+  }
+  $cfg | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
+  Write-Host "已写入：$configPath" -ForegroundColor Green
+}
+$cfgObj = Get-Content $configPath -Raw | ConvertFrom-Json
+New-Item -ItemType Directory -Force -Path $cfgObj.downloadDir | Out-Null
+Write-Host "下载目录：$($cfgObj.downloadDir)" -ForegroundColor Green
+
+Write-Head '5. 开机自启'
+$startupDir = [Environment]::GetFolderPath('Startup')
+$launcher = Join-Path $startupDir 'BiliIDM Bridge.vbs'
+# 顺手清掉老版本注册过的计划任务
+Invoke-SchTasks @('/Delete', '/TN', $taskName, '/F') | Out-Null
+if ($Autostart) {
+  # 不用 schtasks /SC ONLOGON：普通权限下会被「拒绝访问」，而启动文件夹不需要管理员
+  # 注意：.vbs 用 ANSI 保存，注释写英文，避免中文变问号
+  $vbs = @(
+    "' BiliIDM Bridge - autostart at logon. Generated by install.ps1; delete this file to disable."
+    'Set sh = CreateObject("WScript.Shell")'
+    ('sh.Run """' + $node + '"" ""' + $serverJs + '""", 0, False')
+  ) -join "`r`n"
+  Set-Content -Path $launcher -Value $vbs -Encoding ASCII
+  if (Test-Path $launcher) { Write-Host "已写入启动项：$launcher" -ForegroundColor Green }
+  else { Write-Host '写启动项失败，可手动双击 start-bridge.cmd' -ForegroundColor Yellow }
+} else {
+  Write-Host '跳过（-Autostart:$false）' -ForegroundColor Yellow
+}
+
+Write-Head '6. 现在启动一次'
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+  Where-Object { $_.CommandLine -like '*server.mjs*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Process -FilePath $node -ArgumentList @($serverJs) -WorkingDirectory $bridgeDir -WindowStyle Hidden
+Start-Sleep -Seconds 2
+try {
+  $h = Invoke-RestMethod -Uri "http://127.0.0.1:$($cfgObj.port)/health" -TimeoutSec 5
+  Write-Host "服务已启动，IDM=$(if($h.idman){'OK'}else{'未找到'}) ffmpeg=$(if($h.ffmpeg){'OK'}else{'无'})" -ForegroundColor Green
+} catch {
+  Write-Host '服务没起来，看一下 bridge\bridge.log' -ForegroundColor Red
+}
+
+Write-Host @"
+
+================ 最后一步：装扩展 ================
+1. 打开 chrome://extensions/  （Edge 是 edge://extensions/）
+2. 右上角打开「开发者模式」
+3. 点「加载已解压的扩展程序」，选这个文件夹：
+   $root\extension
+4. 打开任意 B站视频页，右下角会出现 IDM 按钮
+"@ -ForegroundColor Cyan

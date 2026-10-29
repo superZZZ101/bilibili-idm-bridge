@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "B站视频下载助手 · IDM 版",
+  "version": "1.0.0",
+  "description": "在 B站视频页一键把视频交给 IDM 下载：自动补齐防盗链 Referer/UA/Cookie，DASH 音视频分离下载后自动合并。",
+  "permissions": ["storage", "cookies", "activeTab"],
+  "host_permissions": [
+    "*://*.bilibili.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": { "service_worker": "bg.js" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "B站 → IDM",
+    "default_icon": { "128": "icons/icon128.png" }
+  },
+  "icons": { "128": "icons/icon128.png", "48": "icons/icon48.png" },
+  "content_scripts": [
+    {
+      "matches": ["*://*.bilibili.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
