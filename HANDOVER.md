@@ -72,6 +72,7 @@ IDM 落盘 ▶（DASH）watchGroup 等到两个分片 size==expect ▶ ffmpeg -c
 | `bridge/config.example.json` | 配置模板（仓库里只放这个） |
 | `extension/manifest.json` | MV3 声明，权限 `storage/cookies/activeTab` |
 | `extension/bg.js` | 扩展与桥接的唯一出口：cookie 汇总、resolve、send、health |
+| `extension/page-url.js` | 浏览器与桥接共用的页面 URL 解析器 |
 | `extension/content.js` | 页面右下角悬浮按钮 + 清晰度面板 |
 | `extension/popup.html` / `popup.js` | 工具栏弹窗 UI（与悬浮按钮同功能） |
 | `extension/icons/` | 图标（System.Drawing 生成，纯渐变无文字） |
@@ -79,6 +80,8 @@ IDM 落盘 ▶（DASH）watchGroup 等到两个分片 size==expect ▶ ffmpeg -c
 | `install.ps1` | 检查环境、生成 config、写启动项自启；`-Remove` 卸载 |
 | `tools/test-relay.mjs` | 中继 Range / HEAD / 流式自测（10 项） |
 | `tools/test-resolve.mjs` | `/api/resolve` 自测（普通视频 / 分P / 番剧 / 非视频页） |
+| `tools/test-page-url.mjs` | 普通视频、番剧、内嵌播放 URL 解析测试 |
+| `tools/test-content.mjs` | 模拟 DOM 下的按钮注入、SPA 切换和异步响应隔离测试 |
 | `tools/test-idm.mjs` | 端到端：桥接 → 中继 → IDM 落盘（下载目录取自 `/health`） |
 | `tools/e2e-merge.mjs` | 全链路：解析 → 双路 IDM → ffmpeg 合并 |
 | `tools/idm-probe.mjs` | 只测 IDM 本身（自带本地 HTTP 源，可对比 `/a`、`/n` 等写法） |
@@ -181,14 +184,10 @@ IDMan.exe /d <中继URL> /p <下载目录> /f <文件名> /n
 - 配置路径失效时打日志 `config.ffmpegPath 不存在，回退自动探测：...`，不会静默变空。
 - `install.ps1` 也会扫 `$env:USERPROFILE`、`Downloads`、`Documents`、`Desktop` 下的 `ffmpeg*\bin\ffmpeg.exe`。
 
-### 7.7 页面识别（**当前局限所在**，见 §10.1）
-三处各自维护一份「什么算视频页」的判断，目前都只认两种路径：
+### 7.7 页面识别
 
-| 文件 | 位置 | 现规则 |
-|---|---|---|
-| `extension/content.js` | `isVideoPage()`，第 6–8 行 | pathname `/video/(BV[0-9A-Za-z]{10}\|av\d+)` 或 `/bangumi/play/(ep\|ss)\d+` |
-| `extension/popup.js` | `isVideoUrl()`，第 13–18 行 | 同上 |
-| `bridge/bili.mjs` | `parsePage()`，第 33–46 行 | 同上；不匹配返回 `null` → resolve 报「不是 B站视频 / 番剧页面」 |
+`extension/page-url.js` 提供统一解析：优先识别番剧路径，再识别普通视频路径，最后从 query 的 `bvid` / `oid` 或旧版 hash 提取视频目标。
+`content.js`、`popup.js` 与 `bridge/bili.mjs` 都调用这一实现，避免三处判断不一致。
 
 ---
 
@@ -224,41 +223,23 @@ git push
 
 ## 10. 已知问题 / 待办
 
-### 10.1 稍后再看 / 收藏夹等「内嵌播放」页面没有下载按钮（**当前唯一未修的功能缺口**）
+### 10.1 稍后再看 / 收藏夹等内嵌播放页（代码与接口已修复，页面待实测）
 
-现象：在「稍后再看」里点开视频播放时，右下角不出现 IDM 按钮；工具栏弹窗也提示
-「打开 B站视频或番剧页面后再点这里」。
+2026-11-03：原先三处页面判断仅支持 `/video/...` 和 `/bangumi/play/...`，导致稍后再看详情页没有按钮，弹窗和桥接也拒绝解析。
 
-原因：这些页面的 URL 不是 `/video/...`，而是形如
+现已统一支持：
 
-```
-https://www.bilibili.com/list/watchlater?bvid=BV1xxxxxxxxx&oid=170001234&mode=0
-https://www.bilibili.com/list/ml1234567?bvid=BV1xxxxxxxxx&oid=...
-https://www.bilibili.com/medialist/play/ml1234567?oid=...
-旧版：https://www.bilibili.com/watchlater/#/BV1xxxxxxxxx
-```
+- `/list/watchlater?bvid=BV...` 与 `/list/ml...?bvid=BV...`。
+- `/medialist/play/ml...?oid=数字`（oid 作为普通视频 aid）。
+- `/watchlater/#/BV...` 旧版 hash 路由。
+- query 的 `p` 分P参数；番剧路径优先，避免把番剧 oid 当成普通视频 aid。
 
-`media` 页 `pathname` 是 `/list/...` / `/watchlater/`，于是：
+列表内切换视频时自动关闭旧面板；忽略过期解析结果，避免下载上一条视频。
 
-1. `content.js` 的 `isVideoPage()` 不匹配 → 不注入按钮；
-2. `popup.js` 的 `isVideoUrl()` 不匹配 → 直接提示换页面；
-3. `bili.mjs` 的 `parsePage()` 返回 `null` → 即使手动调 `/api/resolve` 也报「不是 B站视频 / 番剧页面」。
+验证结果：`node tools/test-page-url.mjs` 的 8 个视频场景和 7 个拒绝场景通过；`node tools/test-content.mjs` 的模拟 DOM 检查通过。重启本地服务后，新版稍后再看和旧版 hash URL 的 `/api/resolve` 均返回 `ok:true`，各列出 3 个清晰度选项。
 
-修复方案（三处一起改，约 30 行）：
-
-- 从 `URL` 里补提取：query 的 `bvid`、`oid`（= avid）；hash 里的 `BV[0-9A-Za-z]{10}`；分P 仍取 `p`
-- 先匹配番剧路径（番剧语境下 `oid` 是 ep_id，别误当 aid）
-- `parsePage()` 里保留一个兜底：常规路径不匹配时，再按「query/hash 中有 bvid 或纯数字 oid」判定为 video
-- 建议抽一个共用的 `isVideoUrl()` 逻辑（目前三份拷贝，改三遍容易漏）
-
-验证方式：
-
-```powershell
-# 改完先确认桥接能解析
-curl.exe -s -X POST http://127.0.0.1:12788/api/resolve -H "Content-Type: application/json" `
-  -d "{\"pageUrl\":\"https://www.bilibili.com/list/watchlater?bvid=BV1PsxT68E5J\"}"
-# 再在浏览器里打开该页面，确认右下角按钮出现、能列清晰度
-```
+生效步骤：在 `chrome://extensions` 点击此扩展的「重新加载」，然后刷新 B站详情页。
+本轮浏览器自动化无法可靠确定当前 URL，已停止；尚未确认真实页面按钮和面板的显示效果。
 
 ### 10.2 其它
 
@@ -289,7 +270,7 @@ curl.exe -s -X POST http://127.0.0.1:12788/api/resolve -H "Content-Type: applica
 | `/health` 里 ffmpeg 为空 | 看日志有无 `config.ffmpegPath 不存在，回退自动探测` |
 | 解析 `request was banned` | UA 太旧，更新 `bili.mjs` 的 `UA_DEFAULT` |
 | 端口被占 | 改 `config.json` 的 `port`，扩展弹窗底部同步改地址 |
-| 右下角没按钮 | 确认当前页是 `/video/BV…` 或 `/bangumi/play/…`；其它页见 §10.1 |
+| 右下角没按钮 | 重新加载扩展并刷新 B站页；已支持带 bvid / oid / hash 视频标识的内嵌播放详情页，见 §10.1 |
 
 ---
 
@@ -307,8 +288,8 @@ curl.exe -s -X POST http://127.0.0.1:12788/api/resolve -H "Content-Type: applica
 ## 13. 改动记录
 
 ### 2026-11-03
-- 文档重整；登记「稍后再看等内嵌播放页无按钮」缺口与修复方案（§10.1）
-- 代码未改
+- 文档重整；修复稍后再看等内嵌播放页的 URL 识别，按钮、弹窗与桥接共用解析器。
+- 新增 URL 回归测试；新版及旧版稍后再看 API 解析通过。浏览器页面显示待重新加载扩展后确认。
 
 ### 2026-10-29（一次性大修，均已验证）
 

@@ -3,9 +3,7 @@
   if (window.__BILI_IDM_LOADED__) return;
   window.__BILI_IDM_LOADED__ = true;
 
-  const isVideoPage = () =>
-    /^\/video\/(BV[0-9A-Za-z]{10}|av\d+)/i.test(location.pathname) ||
-    /^\/bangumi\/play\/(ep|ss)\d+/i.test(location.pathname);
+  const isVideoPage = () => globalThis.BiliIdmPageUrl?.isVideoUrl(location.href) === true;
 
   const CSS = `
   :host { all: initial; }
@@ -108,12 +106,14 @@
     panel.className = 'panel';
     panel.innerHTML = `<div class="head"><span class="dot"></span><span class="title">解析中…</span></div><div class="msg">正在向本地服务请求清晰度列表</div>`;
     shadow.appendChild(panel);
+    const currentPanel = panel;
+    const pageUrl = location.href;
 
     const [data, h] = await Promise.all([
-      send({ type: 'resolve', url: location.href }),
+      send({ type: 'resolve', url: pageUrl }),
       send({ type: 'health' }),
     ]);
-    if (!panel) return;
+    if (panel !== currentPanel || location.href !== pageUrl) return;
 
     const dot = panel.querySelector('.dot');
     dot.className = 'dot ' + (h?.ok ? 'on' : 'off');
@@ -148,9 +148,11 @@
       row.className = 'row';
       row.innerHTML = `<span class="lab">${opt.label}<div class="note">${opt.note || ''}</div></span><span class="go">下载</span>`;
       row.addEventListener('click', async () => {
+        if (location.href !== pageUrl) { syncPage(); return; }
         row.classList.add('busy');
         row.querySelector('.go').textContent = '发送中';
-        const r = await send({ type: 'send', option: opt, title: data.title, pageUrl: location.href });
+        const r = await send({ type: 'send', option: opt, title: data.title, pageUrl });
+        if (panel !== currentPanel || location.href !== pageUrl) return;
         if (r?.ok) {
           row.querySelector('.go').textContent = r.duplicate ? '已在下' : '已发送';
           showToast(
@@ -180,15 +182,18 @@
     });
   }
 
-  // 路由变化（B站是 SPA）时自动挂载/卸载
-  let lastState = null;
-  setInterval(() => {
-    const want = isVideoPage();
-    if (want === lastState) return;
-    lastState = want;
-    if (want) mount();
+  // 列表内切换视频时 URL 会变；关闭旧面板，避免下载上一条视频。
+  let lastUrl = null;
+  function syncPage() {
+    if (location.href === lastUrl) return;
+    lastUrl = location.href;
+    closePanel();
+    if (isVideoPage()) mount();
     else unmount();
-  }, 1200);
+  }
 
-  if (isVideoPage()) { mount(); lastState = true; }
+  window.addEventListener('popstate', syncPage);
+  window.addEventListener('hashchange', syncPage);
+  setInterval(syncPage, 1200);
+  syncPage();
 })();

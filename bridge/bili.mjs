@@ -1,3 +1,5 @@
+import pageUrlApi from '../extension/page-url.js';
+
 /**
  * B站接口解析层：URL → 可用清晰度列表（DASH 音视频 / 单文件 MP4）
  * 放在 Node 侧执行，避免浏览器 fetch 的 forbidden header / CORS 限制，
@@ -29,20 +31,9 @@ export function qnLabel(id) {
   return QN_LABEL[id] || `QN${id}`;
 }
 
-/** 从页面 URL 解析目标 */
+/** 从页面 URL 解析目标（与扩展按钮、工具栏弹窗共用同一实现） */
 export function parsePage(pageUrl) {
-  let u;
-  try { u = new URL(pageUrl); } catch { return null; }
-  if (!/(^|\.)bilibili\.com$/.test(u.hostname)) return null;
-
-  let m = /\/video\/(BV[0-9A-Za-z]{10}|av(\d+))/i.exec(u.pathname);
-  if (m) {
-    const p = Number(u.searchParams.get('p') || 1) || 1;
-    return { kind: 'video', bvid: m[1].startsWith('BV') ? m[1] : null, avid: m[2] ? Number(m[2]) : null, p };
-  }
-  m = /\/bangumi\/play\/(ep|ss)(\d+)/i.exec(u.pathname);
-  if (m) return { kind: 'bangumi', type: m[1].toLowerCase(), id: Number(m[2]) };
-  return null;
+  return pageUrlApi.parse(pageUrl);
 }
 
 async function apiJson(url, { cookie, ua } = {}) {

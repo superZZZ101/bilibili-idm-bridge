@@ -10,13 +10,7 @@ const send = (msg) => new Promise((res) => {
   catch (e) { res({ ok: false, err: e.message }); }
 });
 
-function isVideoUrl(u) {
-  try {
-    const { hostname, pathname } = new URL(u);
-    if (!/(^|\.)bilibili\.com$/.test(hostname)) return false;
-    return /^\/video\/(BV[0-9A-Za-z]{10}|av\d+)/i.test(pathname) || /^\/bangumi\/play\/(ep|ss)\d+/i.test(pathname);
-  } catch { return false; }
-}
+const isVideoUrl = (url) => globalThis.BiliIdmPageUrl?.isVideoUrl(url) === true;
 
 function setStatus(ok, text) {
   dot.className = 'dot ' + (ok ? 'on' : 'off');
